@@ -62,7 +62,7 @@ use std::{
     fmt::{Display, Formatter},
     str::FromStr,
 };
-use x509_cert::{der::Decode, spki::SubjectPublicKeyInfoOwned};
+use x509_cert::{der::Decode, spki, spki::SubjectPublicKeyInfoOwned};
 
 #[cfg(feature = "untested")]
 use {
@@ -80,6 +80,7 @@ pub(crate) const APPLET_NAME: &str = "PIV";
 /// PIV Applet ID
 pub(crate) const APPLET_ID: &[u8] = &[0xa0, 0x00, 0x00, 0x03, 0x08];
 
+const CB_ECC_X25519: usize = 32;
 const CB_ECC_POINTP256: usize = 65;
 const CB_ECC_POINTP384: usize = 97;
 
@@ -487,6 +488,9 @@ pub enum AlgorithmId {
 
     /// ECDSA with the NIST P384 curve.
     EccP384,
+
+    /// DH Key Exchange with Curve 25519 (djb).
+    X25519,
 }
 
 impl TryFrom<u8> for AlgorithmId {
@@ -498,6 +502,7 @@ impl TryFrom<u8> for AlgorithmId {
             0x07 => Ok(AlgorithmId::Rsa2048),
             0x11 => Ok(AlgorithmId::EccP256),
             0x14 => Ok(AlgorithmId::EccP384),
+            0xE1 => Ok(AlgorithmId::X25519),
             _ => Err(Error::AlgorithmError),
         }
     }
@@ -510,6 +515,7 @@ impl From<AlgorithmId> for u8 {
             AlgorithmId::Rsa2048 => 0x07,
             AlgorithmId::EccP256 => 0x11,
             AlgorithmId::EccP384 => 0x14,
+            AlgorithmId::X25519 => 0xE1,
         }
     }
 }
@@ -527,6 +533,7 @@ impl AlgorithmId {
             AlgorithmId::Rsa2048 => 128,
             AlgorithmId::EccP256 => 32,
             AlgorithmId::EccP384 => 48,
+            AlgorithmId::X25519 => 32,
         }
     }
 
@@ -535,6 +542,7 @@ impl AlgorithmId {
         match self {
             AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => 0x01,
             AlgorithmId::EccP256 | AlgorithmId::EccP384 => 0x6,
+            AlgorithmId::X25519 => 0x7,
         }
     }
 }
@@ -870,6 +878,24 @@ pub fn import_ecc_key(
     Ok(())
 }
 
+/// Import a private X25519 encryption key into the Yubikey.
+#[cfg(feature = "untested")]
+pub fn import_x25519_key(
+    yubikey: &mut YubiKey,
+    slot: SlotId,
+    key_data: &[u8],
+    touch_policy: TouchPolicy,
+    pin_policy: PinPolicy
+) -> Result<()> {
+    if key_data.len() > KEYDATA_LEN {
+        return Err(Error::SizeError);
+    }
+
+    let params = vec![key_data];
+
+    write_key(yubikey, slot, params, pin_policy, touch_policy, AlgorithmId::X25519)
+}
+
 /// Generate an attestation certificate for a stored key.
 ///
 /// <https://developers.yubico.com/PIV/Introduction/PIV_attestation.html>
@@ -1167,13 +1193,15 @@ fn read_public_key(
                     .as_bytes(),
             )?)
         }
-        AlgorithmId::EccP256 | AlgorithmId::EccP384 => {
+        AlgorithmId::EccP256 | AlgorithmId::EccP384 | AlgorithmId::X25519 => {
             // 2-byte ASN.1 tag, 1-byte length (because all supported EC pubkey lengths
             // are shorter than 128 bytes, fitting into a definite short ASN.1 length).
             let data = if skip_asn1_tag { &input[3..] } else { input };
 
             let len = if let AlgorithmId::EccP256 = algorithm {
                 CB_ECC_POINTP256
+            } else if let AlgorithmId::X25519 = algorithm {
+                CB_ECC_X25519
             } else {
                 CB_ECC_POINTP384
             };
@@ -1204,6 +1232,15 @@ fn read_public_key(
                 )
                 .map_err(|_| Error::InvalidObject)?
                 .to_public_key_der(),
+                AlgorithmId::X25519 => {
+                    return Ok(SubjectPublicKeyInfoOwned {
+                        algorithm: spki::AlgorithmIdentifier {
+                            oid: spki::ObjectIdentifier::from_arcs([1, 3, 101, 110]).unwrap(), // id-X25519 https://www.rfc-editor.org/rfc/rfc8410
+                            parameters: None,
+                        },
+                        subject_public_key: spki::der::asn1::BitString::from_bytes(&point).map_err(|_| Error::InvalidObject)?,
+                    });
+                }
                 _ => return Err(Error::AlgorithmError),
             }
             .map_err(|_| Error::InvalidObject)?;

@@ -295,15 +295,25 @@ impl<'tx> Transaction<'tx> {
                     return Err(Error::SizeError);
                 }
             }
-            AlgorithmId::EccP256 | AlgorithmId::EccP384 => {
-                let key_len = if let AlgorithmId::EccP256 = algorithm {
-                    32
-                } else {
+            AlgorithmId::EccP256 | AlgorithmId::EccP384 => {                             
+                let key_len = if let AlgorithmId::EccP384 = algorithm {
                     48
+                } else {
+                    32
                 };
 
                 if (!decipher && (in_len > key_len)) || (decipher && (in_len != (key_len * 2) + 1))
                 {
+                    return Err(Error::SizeError);
+                }
+            }
+            AlgorithmId::X25519 => {
+                let key_len = 32;
+                if !decipher {
+                    return Err(Error::ArgumentError);
+                }
+
+                if in_len != key_len {
                     return Err(Error::SizeError);
                 }
             }
@@ -323,7 +333,7 @@ impl<'tx> Transaction<'tx> {
                 Tlv::write(
                     &mut buf[2..],
                     match (algorithm, decipher) {
-                        (AlgorithmId::EccP256, true) | (AlgorithmId::EccP384, true) => 0x85,
+                        (AlgorithmId::EccP256, true) | (AlgorithmId::EccP384, true) | (AlgorithmId::X25519, true) => 0x85,
                         _ => 0x81,
                     },
                     sign_in
