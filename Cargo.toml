@@ -45,7 +45,7 @@ sha1 = { version = "0.10", features = ["oid"] }
 sha2 = { version = "0.10", features = ["oid"] }
 signature = "2"
 subtle = "2"
-uuid = { version = "1.2", features = ["v4"] }
+uuid = { version = "1.11", features = ["v4"] }
 x509-cert.workspace = true
 zeroize = "1"
 
