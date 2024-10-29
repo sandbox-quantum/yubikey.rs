@@ -317,7 +317,7 @@ impl YubiKey {
     }
 
     /// Begin a transaction.
-    pub(crate) fn begin_transaction(&mut self) -> Result<Transaction<'_>> {
+    pub fn begin_transaction(&mut self) -> Result<Transaction<'_>> {
         // TODO(tarcieri): reconnect support
         Transaction::new(&mut self.card)
     }

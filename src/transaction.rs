@@ -27,7 +27,7 @@ pub(crate) enum ChangeRefAction {
 }
 
 /// Exclusive transaction with the YubiKey's PC/SC card.
-pub(crate) struct Transaction<'tx> {
+pub struct Transaction<'tx> {
     inner: pcsc::Transaction<'tx>,
 }
 

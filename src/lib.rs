@@ -76,6 +76,7 @@ pub use crate::{
     policy::{PinPolicy, TouchPolicy},
     reader::Context,
     setting::{Setting, SettingSource},
+    transaction::Transaction,
     yubikey::{CachedPin, Serial, Version, YubiKey},
 };
 

@@ -943,6 +943,17 @@ pub fn decrypt_data(
 ) -> Result<Buffer> {
     let txn = yubikey.begin_transaction()?;
 
+    decrypt_data_with_transaction(&txn, input, algorithm, key)
+}
+
+/// Decrypt data using a PIV key.
+#[cfg(feature = "untested")]
+pub fn decrypt_data_with_transaction(
+    txn: &crate::Transaction<'_>,
+    input: &[u8],
+    algorithm: AlgorithmId,
+    key: SlotId,
+) -> Result<Buffer> {
     // don't attempt to reselect in crypt operations to avoid problems with PIN_ALWAYS
     txn.authenticated_command(input, algorithm, key, true)
 }
