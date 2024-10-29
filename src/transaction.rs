@@ -307,6 +307,11 @@ impl<'tx> Transaction<'tx> {
                     return Err(Error::SizeError);
                 }
             }
+            AlgorithmId::Ed25519 => {
+                if decipher {
+                    return Err(Error::ArgumentError);
+                }
+            }
             AlgorithmId::X25519 => {
                 let key_len = 32;
                 if !decipher {

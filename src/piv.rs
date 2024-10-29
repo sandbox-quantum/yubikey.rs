@@ -62,7 +62,7 @@ use std::{
     fmt::{Display, Formatter},
     str::FromStr,
 };
-use x509_cert::{der::Decode, spki, spki::SubjectPublicKeyInfoOwned};
+use x509_cert::{der::Decode, spki::{self, der::asn1::BitString, SubjectPublicKeyInfoOwned}};
 
 #[cfg(feature = "untested")]
 use {
@@ -80,6 +80,7 @@ pub(crate) const APPLET_NAME: &str = "PIV";
 /// PIV Applet ID
 pub(crate) const APPLET_ID: &[u8] = &[0xa0, 0x00, 0x00, 0x03, 0x08];
 
+const CB_ECC_ED25519: usize = 32;
 const CB_ECC_X25519: usize = 32;
 const CB_ECC_POINTP256: usize = 65;
 const CB_ECC_POINTP384: usize = 97;
@@ -489,6 +490,9 @@ pub enum AlgorithmId {
     /// ECDSA with the NIST P384 curve.
     EccP384,
 
+    /// EdDSA with the Curve 25519 (djb).
+    Ed25519,
+
     /// DH Key Exchange with Curve 25519 (djb).
     X25519,
 }
@@ -502,6 +506,7 @@ impl TryFrom<u8> for AlgorithmId {
             0x07 => Ok(AlgorithmId::Rsa2048),
             0x11 => Ok(AlgorithmId::EccP256),
             0x14 => Ok(AlgorithmId::EccP384),
+            0xE0 => Ok(AlgorithmId::Ed25519),
             0xE1 => Ok(AlgorithmId::X25519),
             _ => Err(Error::AlgorithmError),
         }
@@ -515,6 +520,7 @@ impl From<AlgorithmId> for u8 {
             AlgorithmId::Rsa2048 => 0x07,
             AlgorithmId::EccP256 => 0x11,
             AlgorithmId::EccP384 => 0x14,
+            AlgorithmId::Ed25519 => 0xE0,
             AlgorithmId::X25519 => 0xE1,
         }
     }
@@ -533,6 +539,7 @@ impl AlgorithmId {
             AlgorithmId::Rsa2048 => 128,
             AlgorithmId::EccP256 => 32,
             AlgorithmId::EccP384 => 48,
+            AlgorithmId::Ed25519 => 32,
             AlgorithmId::X25519 => 32,
         }
     }
@@ -541,8 +548,9 @@ impl AlgorithmId {
     fn get_param_tag(self) -> u8 {
         match self {
             AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => 0x01,
-            AlgorithmId::EccP256 | AlgorithmId::EccP384 => 0x6,
-            AlgorithmId::X25519 => 0x7,
+            AlgorithmId::EccP256 | AlgorithmId::EccP384 => 0x06,
+            AlgorithmId::Ed25519 => 0x07,
+            AlgorithmId::X25519 => 0x08,
         }
     }
 }
@@ -747,7 +755,6 @@ fn write_key(
     let status_words = txn
         .transfer_data(&templ, &key_data[..offset], 256)?
         .status_words();
-
     match status_words {
         StatusWords::Success => Ok(()),
         StatusWords::SecurityStatusError => Err(Error::AuthenticationError),
@@ -878,7 +885,26 @@ pub fn import_ecc_key(
     Ok(())
 }
 
-/// Import a private X25519 encryption key into the Yubikey.
+/// Import a private Ed25519 signing key into the YubiKey.
+#[cfg(feature = "untested")]
+pub fn import_ed25519_key(
+    yubikey: &mut YubiKey,
+    slot: SlotId,
+    key_data: &[u8],
+    touch_policy: TouchPolicy,
+    pin_policy: PinPolicy,
+) -> Result<()> {
+    if key_data.len() != CB_ECC_ED25519 {
+        return Err(Error::SizeError);
+    }
+
+    let params = vec![key_data];
+
+    write_key(yubikey, slot, params, pin_policy, touch_policy, AlgorithmId::Ed25519)?;
+    Ok(())
+}
+
+/// Import a private X25519 encryption key into the YubiKey.
 #[cfg(feature = "untested")]
 pub fn import_x25519_key(
     yubikey: &mut YubiKey,
@@ -887,7 +913,7 @@ pub fn import_x25519_key(
     touch_policy: TouchPolicy,
     pin_policy: PinPolicy
 ) -> Result<()> {
-    if key_data.len() > KEYDATA_LEN {
+    if key_data.len() !=  CB_ECC_X25519 {
         return Err(Error::SizeError);
     }
 
@@ -929,6 +955,18 @@ pub fn sign_data(
 ) -> Result<Buffer> {
     let txn = yubikey.begin_transaction()?;
 
+    // don't attempt to reselect in crypt operations to avoid problems with PIN_ALWAYS
+    txn.authenticated_command(raw_in, algorithm, key, false)
+}
+
+/// Sign data using a PIV key.
+#[cfg(feature = "untested")]
+pub fn sign_data_with_transaction(
+    txn: &crate::Transaction<'_>,
+    raw_in: &[u8],
+    algorithm: AlgorithmId,
+    key: SlotId,
+) -> Result<Buffer> {
     // don't attempt to reselect in crypt operations to avoid problems with PIN_ALWAYS
     txn.authenticated_command(raw_in, algorithm, key, false)
 }
@@ -1204,7 +1242,7 @@ fn read_public_key(
                     .as_bytes(),
             )?)
         }
-        AlgorithmId::EccP256 | AlgorithmId::EccP384 | AlgorithmId::X25519 => {
+        AlgorithmId::EccP256 | AlgorithmId::EccP384 | AlgorithmId::Ed25519 | AlgorithmId::X25519 => {
             // 2-byte ASN.1 tag, 1-byte length (because all supported EC pubkey lengths
             // are shorter than 128 bytes, fitting into a definite short ASN.1 length).
             let data = if skip_asn1_tag { &input[3..] } else { input };
@@ -1213,7 +1251,10 @@ fn read_public_key(
                 CB_ECC_POINTP256
             } else if let AlgorithmId::X25519 = algorithm {
                 CB_ECC_X25519
-            } else {
+            } else if let AlgorithmId::Ed25519 = algorithm {
+                CB_ECC_ED25519
+            } 
+            else {
                 CB_ECC_POINTP384
             };
 
@@ -1243,13 +1284,22 @@ fn read_public_key(
                 )
                 .map_err(|_| Error::InvalidObject)?
                 .to_public_key_der(),
+                AlgorithmId::Ed25519 => {
+                    return Ok(SubjectPublicKeyInfoOwned {
+                        algorithm: spki::AlgorithmIdentifier {
+                            oid: spki::ObjectIdentifier::from_arcs([1, 3, 101, 112]).unwrap(), // id-Ed25519 https://www.rfc-editor.org/rfc/rfc8410
+                            parameters: None,
+                        },
+                        subject_public_key: BitString::from_bytes(&point).map_err(|_| Error::InvalidObject)?,
+                    });
+                }
                 AlgorithmId::X25519 => {
                     return Ok(SubjectPublicKeyInfoOwned {
                         algorithm: spki::AlgorithmIdentifier {
                             oid: spki::ObjectIdentifier::from_arcs([1, 3, 101, 110]).unwrap(), // id-X25519 https://www.rfc-editor.org/rfc/rfc8410
                             parameters: None,
                         },
-                        subject_public_key: spki::der::asn1::BitString::from_bytes(&point).map_err(|_| Error::InvalidObject)?,
+                        subject_public_key: BitString::from_bytes(&point).map_err(|_| Error::InvalidObject)?,
                     });
                 }
                 _ => return Err(Error::AlgorithmError),
